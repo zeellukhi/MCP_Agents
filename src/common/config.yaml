@@ -1,0 +1,7 @@
+# config.yaml
+# Example configuration file
+app_name: MCP_Agents
+debug: false
+logging:
+  level: INFO
+  file: logs/app.log
