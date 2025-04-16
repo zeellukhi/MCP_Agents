@@ -1,1 +1,13 @@
 # /docker-compose.yml - (Optional) for containerized deployments
+version: "3.9"
+
+services:
+  personal_assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"    # API server exposed on 8081
+      - "9091:9091"    # MCP server exposed on 9091
+    env_file:
+      - .env

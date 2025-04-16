@@ -1,1 +1,27 @@
-# /requirements.txt - Python dependencies (e.g., Starlette, uvicorn, langchain, MCP tools, etc.)
+# MCP_Agents/requirements.txt
+# --- Core Dependencies ---
+python-dotenv>=1.0.0 # For loading .env files
+uvicorn[standard]>=0.29.0 # ASGI server (includes httptools, websockets, watchfiles)
+starlette>=0.37.0 # ASGI framework for API/MCP servers
+asyncio>=3.4.0 # Core async library (usually built-in)
+
+# --- LangChain & MCP ---
+langchain>=0.1.0,<0.2.0 # Core LangChain framework
+langchain-google-genai>=1.0.0 # Google Generative AI integration (Gemini)
+langgraph>=0.0.40 # For creating agent runnables (like ReAct)
+langchain-mcp-tools>=0.1.0 # MCP <-> LangChain tool conversion
+langchain-mcp-adapters>=0.1.0 # MCP server/client libraries (check if this exact name is correct or if 'mcp' is enough)
+# Note: Verify the exact package name for 'mcp' library if langchain-mcp-adapters isn't it.
+# Example: If the core MCP server/client is separate:
+# mcp>=0.1.0 # Assuming this is the core MCP library
+
+# --- External Service Integrations ---
+notion-client>=2.0.0 # Official Notion SDK
+google-api-python-client>=2.80.0 # Google API Client Library
+google-auth-oauthlib>=1.0.0 # Google OAuth library
+google-auth-httplib2>=0.1.0 # Google Auth HTTP library support
+
+# --- Optional for Development/Testing ---
+# pytest>=7.0.0
+# pytest-asyncio>=0.20.0
+# httpx>=0.25.0 # For making async HTTP requests in tests
