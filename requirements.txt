@@ -1,27 +1,42 @@
 # MCP_Agents/requirements.txt
-# --- Core Dependencies ---
-python-dotenv>=1.0.0 # For loading .env files
-uvicorn[standard]>=0.29.0 # ASGI server (includes httptools, websockets, watchfiles)
-starlette>=0.37.0 # ASGI framework for API/MCP servers
-asyncio>=3.4.0 # Core async library (usually built-in)
+# This file lists the essential Python dependencies for the project.
+# Use 'pip install -r requirements.txt' to install them.
 
-# --- LangChain & MCP ---
-langchain>=0.1.0,<0.2.0 # Core LangChain framework
-langchain-google-genai>=1.0.0 # Google Generative AI integration (Gemini)
-langgraph>=0.0.40 # For creating agent runnables (like ReAct)
-langchain-mcp-tools>=0.1.0 # MCP <-> LangChain tool conversion
-langchain-mcp-adapters>=0.1.0 # MCP server/client libraries (check if this exact name is correct or if 'mcp' is enough)
-# Note: Verify the exact package name for 'mcp' library if langchain-mcp-adapters isn't it.
-# Example: If the core MCP server/client is separate:
-# mcp>=0.1.0 # Assuming this is the core MCP library
+# --- Core Web Framework & Server ---
+uvicorn[standard]==0.34.1   # ASGI server, [standard] includes performance extras
+starlette==0.46.2          # ASGI framework used by API and MCP internally
 
-# --- External Service Integrations ---
-notion-client>=2.0.0 # Official Notion SDK
-google-api-python-client>=2.80.0 # Google API Client Library
-google-auth-oauthlib>=1.0.0 # Google OAuth library
-google-auth-httplib2>=0.1.0 # Google Auth HTTP library support
+# --- Configuration ---
+python-dotenv==1.0.1       # For loading configuration from .env files
+
+# --- LangChain Core & Components ---
+langchain==0.3.23           # Core LangChain framework for agents, chains etc.
+langchain-core==0.3.52     # Base abstractions and LangChain Expression Language (LCEL)
+langchain-google-genai==2.1.3 # Google Generative AI integration (Gemini)
+langgraph==0.3.30          # For creating stateful, multi-actor applications (e.g., ReAct agent)
+
+# --- MCP Integration ---
+# Model Context Protocol SDK and LangChain integration
+mcp==1.6.0                 # Core MCP SDK (from modelcontextprotocol/python-sdk)
+langchain-mcp-tools==0.2.1   # Converts MCP endpoints to LangChain tools
+
+# --- External Service Tool Integrations ---
+# Notion API access
+notion-client==2.3.0       # Official Notion SDK
+
+# Google Calendar API access
+google-api-python-client==2.167.0 # Google API Client Library
+google-auth-oauthlib==1.2.1    # Google OAuth library for handling authorization flow
+google-auth-httplib2==0.2.0  # Google Auth HTTP library support (often required by oauthlib)
+
+# --- HTTP Client (Optional but often a sub-dependency) ---
+httpx==0.28.1              # Modern HTTP client (commented out unless needed directly)
 
 # --- Optional for Development/Testing ---
-# pytest>=7.0.0
-# pytest-asyncio>=0.20.0
-# httpx>=0.25.0 # For making async HTTP requests in tests
+# Create a requirements-dev.txt for these if needed
+# pytest>=7.0.0              # Framework for writing tests
+# pytest-asyncio>=0.20.0     # For testing asyncio code with pytest
+# ruff                       # Linter and formatter
+# black                      # Code formatter
+# mypy                       # Static type checker
+# pre-commit                 # For running checks before git commits

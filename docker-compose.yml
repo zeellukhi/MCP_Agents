@@ -1,13 +1,40 @@
-# /docker-compose.yml - (Optional) for containerized deployments
-version: "3.9"
+# MCP_Agents/docker-compose.yml
+version: "3.9" # Specify docker-compose version
 
 services:
-  personal_assistant:
+  # Service name for your application stack
+  mcp-agent:
+    # Build the image using the Dockerfile in the current directory
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8081:8081"    # API server exposed on 8081
-      - "9091:9091"    # MCP server exposed on 9091
+    # Container name for easier identification (optional)
+    container_name: mcp_agent_app
+    # Restart policy (e.g., restart unless explicitly stopped)
+    restart: unless-stopped
+    # Load environment variables from the .env file in the project root
+    # Ensures your API keys and settings are available inside the container
     env_file:
       - .env
+    # Map ports from the host machine to the container
+    # Format: "HOST_PORT:CONTAINER_PORT"
+    ports:
+      - "${API_PORT:-8081}:8081" # Use API_PORT from .env, default to 8081 on host
+      - "${MCP_PORT:-9091}:9091" # Use MCP_PORT from .env, default to 9091 on host
+    # Volumes (Optional but Recommended for Persistence):
+    volumes:
+      # Mount the logs directory to persist logs outside the container
+      - ./logs:/app/logs
+      # Mount the Google token file to persist OAuth credentials
+      # Use the path relative to WORKDIR (/app) defined in Dockerfile
+      # Ensure GOOGLE_TOKEN_FILE in .env matches the target filename (e.g., token.json)
+      - ./${GOOGLE_TOKEN_FILE:-token.json}:/app/${GOOGLE_TOKEN_FILE:-token.json}
+      # If client_secret.json is outside '.', you might need another volume,
+      # but it's often better copied into the image if static, or mounted if dynamic.
+      # Example if client_secret.json is in ./credentials:
+      # - ./credentials/client_secret.json:/app/credentials/client_secret.json:ro # Mount read-only
+
+# Define networks if needed (e.g., for connecting to other services like databases)
+# networks:
+#   app_network:
+#     driver: bridge
