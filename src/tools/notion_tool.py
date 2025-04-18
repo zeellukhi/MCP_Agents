@@ -1,197 +1,363 @@
-# MCP_Agents/src/tools/notion_tool.py
-"""
-Notion Tool Module
+# src/tools/notion_tool.py
 
-Provides asynchronous functions to interact with the Notion API for managing
-tasks, checklists, and expenses using the official notion-client library.
-Relies on configuration loaded via src.common.config.
-"""
+import os
+import asyncio
+# import logging # Use central logger instead
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
+from notion_client import AsyncClient as NotionAsyncClient
+# from dotenv import load_dotenv # Handled by central config
+
+# Use central config and logger
+from src.common.config import config
 
 import logging
-import asyncio
-from datetime import datetime, date
-from typing import Optional, List, Dict, Any, Union
 
-# Third-party imports
-from notion_client import AsyncClient as NotionAsyncClient
-from notion_client.helpers import is_full_page_or_database
-from notion_client.errors import APIResponseError
-
-# Internal imports
-from src.common.config import config # Use centralized config
-
-# --- Setup ---
 logger = logging.getLogger(__name__) # Get logger instance
 
-# Initialize Notion Client (only if API key is provided)
-notion: Optional[NotionAsyncClient] = None
-if config and config.NOTION_API_KEY:
-    notion = NotionAsyncClient(auth=config.NOTION_API_KEY)
-    logger.info("Notion client initialized.")
-else:
-    logger.warning("NOTION_API_KEY not found in environment variables. Notion tool functions will be disabled.")
+# --- Notion Client Helper ---
+# Helper to initialize client - avoid global instance
+def _get_notion_client() -> Optional[NotionAsyncClient]:
+    """Initializes and returns Notion client if API key is available."""
+    if config.NOTION_API_KEY:
+        return NotionAsyncClient(auth=config.NOTION_API_KEY)
+    logger.error("Notion API Key not configured in .env file.")
+    return None
 
-# --- Helper Functions ---
+# --- Reference ID Generator ---
+def generate_ref(prefix: str) -> str:
+    """Generate a short reference ID for cross-database correlation."""
+    # Truncate prefix safely
+    safe_prefix = prefix[:15].replace(" ", "_") # Limit length and avoid spaces
+    return safe_prefix + "-" + datetime.now().strftime('%H%M%S%f')[:9] # Added microseconds for more uniqueness
 
-def _format_date(date_obj: Union[datetime, date]) -> Dict[str, str]:
-    """Formats a datetime or date object into Notion's date property format."""
-    return {"start": date_obj.isoformat()}
+# -------------------------------------------------------------------
+# 1. Tasks & Travel Functions (Using Task DB)
+# -------------------------------------------------------------------
 
-def _validate_notion_client() -> bool:
-    """Checks if the Notion client is initialized."""
-    if not notion:
-        logger.error("Notion client is not initialized. Check NOTION_API_KEY.")
-        return False
-    return True
+async def add_notion_task(task_name: str, due_date: Optional[str] = None, status: str = "To Do", auto_create_checklist: bool = True) -> str:
+    """Adds a task to the Notion Task Database."""
+    notion = _get_notion_client()
+    if not notion or not config.NOTION_TASK_DB_ID:
+        return "Notion client or Task DB ID not configured. Check .env file."
+    if not task_name:
+        logger.warning("Task name is empty.")
+        return "Task name cannot be empty."
 
-# --- Tool Functions ---
-
-async def add_notion_task(
-    task_name: str,
-    due_date: Optional[str] = None,
-    priority: Optional[str] = None,
-    project: Optional[str] = None,
-    notes: Optional[str] = None
-) -> str:
-    """
-    Adds a new task page to the configured Notion Task Database.
-
-    Input:
-        task_name (str): The name/title of the task (Required).
-        due_date (Optional[str]): The due date in 'YYYY-MM-DD' format.
-        priority (Optional[str]): Priority level (e.g., 'High', 'Medium', 'Low').
-                                  Assumes a 'Priority' Select property exists.
-        project (Optional[str]): Associated project name.
-                                 Assumes a 'Project' Relation or Select property exists.
-        notes (Optional[str]): Additional details/content for the task page body.
-
-    Output:
-        str: Confirmation message with task name/URL or an error message.
-    """
-    if not _validate_notion_client() or not config.NOTION_TASK_DB_ID:
-        return "Error: Notion client or Task Database ID is not configured."
-
-    logger.info(f"Attempting to add Notion task: '{task_name}'")
-    properties: Dict[str, Any] = {
-        "Name": {"title": [{"text": {"content": task_name}}]} # Assumes 'Name' is the Title property
-    }
-
-    if due_date:
-        try:
-            # Ensure correct parsing for YYYY-MM-DD
-            dt_obj = date.fromisoformat(due_date) # Use date.fromisoformat for YYYY-MM-DD
-            properties["Due Date"] = {"date": _format_date(dt_obj)} # Assumes 'Due Date' is a Date property
-        except ValueError:
-            logger.warning(f"Invalid due_date format: {due_date}. Should be YYYY-MM-DD.")
-            # Return an error as date is likely important if provided
-            return f"Error: Invalid due_date format '{due_date}'. Use YYYY-MM-DD."
-
-    if priority:
-        properties["Priority"] = {"select": {"name": priority}} # Assumes 'Priority' is a Select property
-
-    if project:
-        # Assuming Select for simplicity. Adjust if it's a Relation property (requires page ID).
-        properties["Project"] = {"select": {"name": project}} # Assumes 'Project' is a Select property
-
-    # --- Prepare children blocks ONLY if notes are provided ---
-    children_blocks = []
-    if notes and notes.strip(): # Check if notes actually contain text
-        children_blocks.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": notes}}]
-            }
-        })
-
-    # --- Construct payload for API call ---
-    payload = {
-         "parent": {"database_id": config.NOTION_TASK_DB_ID},
-         "properties": properties
-    }
-    # *** Conditionally add children ***
-    if children_blocks:
-         payload["children"] = children_blocks
-    # If children_blocks is empty, the 'children' key will NOT be sent, avoiding the null issue.
-
-
+    logger.info(f"Adding task: '{task_name}', Due: '{due_date}', Status: '{status}'")
     try:
-        # Use the constructed payload
-        response = await notion.pages.create(**payload)
-        page_id = response.get('id', 'N/A')
-        page_url = response.get('url', '')
-        logger.info(f"Successfully added Notion task '{task_name}'. Page ID: {page_id}")
-        # Provide a more useful confirmation including the URL
+        ref_id = generate_ref(task_name)
+        properties = {
+            "Name": {"title": [{"text": {"content": task_name}}]},
+            # Ensure 'Status' property matches your DB schema (Select or Status type)
+            # If your Status property is of type "Status", use this:
+            # "Status": {"status": {"name": status}},
+            # If your Status property is of type "Select", use this:
+            "Status": {"select": {"name": status}},
+            "Reference ID": {"rich_text": [{"text": {"content": ref_id}}]}
+        }
+        if due_date:
+            try:
+                datetime.strptime(due_date, "%Y-%m-%d")
+                # Ensure 'Due Date' property exists (Date type)
+                properties["Due Date"] = {"date": {"start": due_date}}
+                logger.debug(f"Validated due date: {due_date}")
+            except ValueError:
+                logger.warning(f"Invalid due date format: {due_date}")
+                return "Invalid due date format. Use YYYY-MM-DD."
+
+        response = await notion.pages.create(
+            parent={"database_id": config.NOTION_TASK_DB_ID},
+            properties=properties
+        )
+        task_page_id = response["id"]
+        page_url = response.get("url", "N/A") # Get URL if available
+        logger.info(f"Task added successfully. Page ID: {task_page_id}, URL: {page_url}")
+
+        # Auto-create checklist item if configured
+        if due_date and auto_create_checklist and config.NOTION_DAILY_CHECKLIST_DB_ID:
+            checklist_result = await add_daily_checklist_item(due_date, f"Task Due: {task_name}")
+            logger.info(f"Auto-created daily checklist item result: {checklist_result}")
+
         return f"Task '{task_name}' added to Notion. URL: {page_url}"
-
-    except APIResponseError as e:
-        # Extract the core error message from Notion's response body
-        error_message = e.body.get('message', str(e))
-        logger.error(f"Notion API Error adding task '{task_name}': {error_message}", exc_info=True)
-        # Return a simple, clean error string
-        return f"Error adding Notion task '{task_name}': {error_message}"
     except Exception as e:
-        logger.error(f"Unexpected error adding Notion task '{task_name}': {e}", exc_info=True)
-        # Return a simple, clean error string
-        return f"An unexpected error occurred while adding task '{task_name}'."
+        logger.error(f"Error adding task: {e}", exc_info=True)
+        return f"Failed to add task to Notion: {str(e)}"
 
+async def update_task_status(page_id: str, new_status: str) -> str:
+    """Updates the status of a specific task page."""
+    notion = _get_notion_client()
+    if not notion:
+        return "Notion client not configured."
+    # Add check for TASK_DB_ID? Although page_id is universal, this tool conceptually belongs to tasks
+    if not config.NOTION_TASK_DB_ID:
+         return "Notion Task DB ID not configured. Cannot update status."
 
-# --- Other functions (add_daily_checklist_item, add_daily_expense, etc.) remain the same ---
-# Make sure they also return simple strings on error if you modify them.
-
-async def add_daily_checklist_item(item_name: str, checked: bool = False) -> str:
-    # ... (keep existing implementation) ...
-    if not _validate_notion_client() or not config.NOTION_DAILY_CHECKLIST_DB_ID:
-        return "Error: Notion client or Daily Checklist Database ID is not configured."
-    # ... rest of the function ...
+    logger.info(f"Updating task {page_id} to '{new_status}'")
     try:
-        # ... notion call ...
-        return f"Checklist item '{item_name}' added for today."
-    except APIResponseError as e:
-         error_message = e.body.get('message', str(e))
-         logger.error(f"Notion API Error adding checklist item '{item_name}': {error_message}", exc_info=True)
-         return f"Error adding checklist item '{item_name}': {error_message}" # Simple string
+        # Ensure 'Status' property matches your DB schema (Select or Status type)
+        # If your Status property is of type "Status", use this:
+        # properties = {"Status": {"status": {"name": new_status}}}
+        # If your Status property is of type "Select", use this:
+        properties = {"Status": {"select": {"name": new_status}}}
+        await notion.pages.update(page_id=page_id, properties=properties)
+        return f"Task ({page_id}) status updated to '{new_status}'."
     except Exception as e:
-         logger.error(f"Unexpected error adding checklist item '{item_name}': {e}", exc_info=True)
-         return f"An unexpected error occurred while adding checklist item '{item_name}'." # Simple string
+        logger.error(f"Error updating status for {page_id}: {e}", exc_info=True)
+        return f"Failed to update status: {str(e)}"
+
+async def delete_task(page_id: str) -> str:
+    """Archives (deletes) a specific task page."""
+    notion = _get_notion_client()
+    if not notion:
+        return "Notion client not configured."
+    # Add check for TASK_DB_ID? Although page_id is universal, this tool conceptually belongs to tasks
+    if not config.NOTION_TASK_DB_ID:
+         return "Notion Task DB ID not configured. Cannot delete task."
+
+    logger.info(f"Archiving task {page_id}")
+    try:
+        await notion.pages.update(page_id=page_id, archived=True)
+        return f"Task {page_id} archived successfully."
+    except Exception as e:
+        logger.error(f"Error deleting task {page_id}: {e}", exc_info=True)
+        return f"Failed to delete task: {str(e)}"
+
+# -------------------------------------------------------------------
+# 2. Travel Plan Functionality (Using Task DB with Type=Travel)
+# -------------------------------------------------------------------
+
+async def create_travel_plan(
+    destination: str,
+    start_date: str,
+    end_date: str,
+    plan_title: Optional[str] = None,
+    checklist: Optional[List[str]] = None,
+    notes: Optional[str] = None,
+    auto_create_daily: bool = True
+) -> str:
+    """Creates a travel plan entry in the Task Database."""
+    notion = _get_notion_client()
+    if not notion or not config.NOTION_TASK_DB_ID:
+         return "Notion client or Task DB ID not configured."
+
+    plan_title = plan_title or f"Travel Plan: {destination}"
+    logger.info(f"Creating travel plan: '{plan_title}' for {destination} from {start_date} to {end_date}")
+    try:
+        # Validate dates
+        start_dt_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end_dt_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+        if end_dt_obj < start_dt_obj:
+             return "End date cannot be before start date."
+
+        ref_id = generate_ref(plan_title)
+        properties = {
+            "Name": {"title": [{"text": {"content": plan_title}}]},
+            # Ensure 'Type' property exists in your Task DB (Select type)
+            "Type": {"select": {"name": "Travel"}},
+            # Ensure 'Destination' property exists (Rich Text type)
+            "Destination": {"rich_text": [{"text": {"content": destination}}]},
+            # Ensure 'Start Date' property exists (Date type)
+            "Start Date": {"date": {"start": start_date}},
+            # Ensure 'End Date' property exists (Date type)
+            "End Date": {"date": {"start": end_date}},
+            "Reference ID": {"rich_text": [{"text": {"content": ref_id}}]}
+        }
+        # Ensure 'Notes' property exists if used (Rich Text type)
+        if notes:
+            properties["Notes"] = {"rich_text": [{"text": {"content": notes}}]}
+
+        response = await notion.pages.create(
+            parent={"database_id": config.NOTION_TASK_DB_ID},
+            properties=properties
+        )
+        travel_page_id = response["id"]
+        page_url = response.get("url", "N/A")
+        logger.info(f"Travel plan created with page ID: {travel_page_id}, URL: {page_url}")
+
+        # Add checklist items as blocks if provided
+        if checklist and isinstance(checklist, list):
+            blocks = []
+            for item in checklist:
+                block = {
+                    "object": "block",
+                    "type": "to_do",
+                    "to_do": {
+                        "rich_text": [{"type": "text", "text": {"content": item}}],
+                        "checked": False
+                    }
+                }
+                blocks.append(block)
+            # Append blocks in chunks of 100 (Notion API limit)
+            for i in range(0, len(blocks), 100):
+                 chunk = blocks[i:i+100]
+                 await notion.blocks.children.append(block_id=travel_page_id, children=chunk)
+            logger.info(f"Checklist blocks added to travel plan page {travel_page_id}.")
+
+        # Auto-create daily checklist items if configured
+        if auto_create_daily and config.NOTION_DAILY_CHECKLIST_DB_ID:
+            current_date = start_dt_obj
+            while current_date <= end_dt_obj:
+                daily_item = f"Travel: {plan_title} - Day {(current_date - start_dt_obj).days + 1}"
+                result = await add_daily_checklist_item(current_date.isoformat(), daily_item)
+                logger.debug(f"Auto-created daily checklist item for {current_date}: {result}")
+                current_date += timedelta(days=1)
+
+        return f"Travel plan for {destination} created. URL: {page_url}"
+    except ValueError as ve:
+        logger.warning(f"Invalid date format: {ve}")
+        return "Invalid date format. Use YYYY-MM-DD."
+    except Exception as e:
+        logger.error(f"Error creating travel plan: {e}", exc_info=True)
+        return f"Failed to create travel plan: {str(e)}"
+
+# -------------------------------------------------------------------
+# 3. Daily Checklist Functions (Separate Database)
+# -------------------------------------------------------------------
+
+async def add_daily_checklist_item(date: str, item: str, completed: bool = False) -> str:
+    """Adds an item to the Daily Checklist database for a specific date."""
+    notion = _get_notion_client()
+    if not notion or not config.NOTION_DAILY_CHECKLIST_DB_ID:
+        return "Daily Checklist database not configured."
+
+    logger.info(f"Adding daily checklist item: '{item}' for date {date}")
+    try:
+         # Validate date
+        datetime.strptime(date, "%Y-%m-%d")
+
+        ref_id = generate_ref(item)
+        properties = {
+            # Ensure 'Name' property exists (Title type)
+            "Name": {"title": [{"text": {"content": item}}]},
+            # Ensure 'Date' property exists (Date type)
+            "Date": {"date": {"start": date}},
+            # Ensure 'Completed' property exists (Checkbox type)
+            "Completed": {"checkbox": completed},
+            "Reference ID": {"rich_text": [{"text": {"content": ref_id}}]}
+        }
+        response = await notion.pages.create(
+            parent={"database_id": config.NOTION_DAILY_CHECKLIST_DB_ID},
+            properties=properties
+        )
+        page_url = response.get("url", "N/A")
+        logger.info(f"Daily checklist item added. Page ID: {response['id']}, URL: {page_url}")
+        return f"Checklist item '{item}' added for {date}. URL: {page_url}"
+    except ValueError:
+         logger.warning(f"Invalid date format for daily checklist item: {date}")
+         return "Invalid date format for daily checklist item. Use YYYY-MM-DD."
+    except Exception as e:
+        logger.error(f"Error adding daily checklist item: {e}", exc_info=True)
+        return f"Failed to add checklist item: {str(e)}"
+
+# -------------------------------------------------------------------
+# 4. Expense Tracker Functions (Separate Database)
+# -------------------------------------------------------------------
 
 async def add_daily_expense(
-    item_name: str,
+    expense_date: str,
     amount: float,
-    category: Optional[str] = None,
-    expense_date: Optional[str] = None
+    category: str,
+    payment_method: str,
+    vendor: Optional[str] = None,
+    notes: Optional[str] = None
 ) -> str:
-    # ... (keep existing implementation) ...
-    if not _validate_notion_client() or not config.NOTION_EXPENSE_DB_ID:
-        return "Error: Notion client or Expense Database ID is not configured."
-    # ... rest of the function ...
+    """Adds an expense entry to the Expense Tracker database."""
+    notion = _get_notion_client()
+    if not notion or not config.NOTION_EXPENSE_DB_ID:
+        return "Expense Tracker database not configured."
+
+    logger.info(f"Adding expense: {amount} on {expense_date}, Category: {category}")
     try:
-        # ... notion call ...
-        return f"Expense '{item_name}' of {amount} added for {expense_date}."
-    except APIResponseError as e:
-        error_message = e.body.get('message', str(e))
-        logger.error(f"Notion API Error adding expense '{item_name}': {error_message}", exc_info=True)
-        return f"Error adding expense '{item_name}': {error_message}" # Simple string
+         # Validate date
+        datetime.strptime(expense_date, "%Y-%m-%d")
+        if not isinstance(amount, (int, float)) or amount <= 0:
+             return "Invalid amount. Must be a positive number."
+
+        ref_id = "EXP-" + datetime.now().strftime('%y%m%d%H%M%S') # Shortened ref
+        properties = {
+            # Ensure 'Expense Date' property exists (Date type)
+            "Expense Date": {"date": {"start": expense_date}},
+            # Ensure 'Amount' property exists (Number type)
+            "Amount": {"number": amount},
+            # Ensure 'Category' property exists (Select type)
+            "Category": {"select": {"name": category}},
+            # Ensure 'Payment Method' property exists (Select type)
+            "Payment Method": {"select": {"name": payment_method}},
+            "Reference ID": {"rich_text": [{"text": {"content": ref_id}}]}
+        }
+        # Ensure 'Vendor' property exists if used (Rich Text type)
+        if vendor:
+            properties["Vendor"] = {"rich_text": [{"text": {"content": vendor}}]}
+        # Ensure 'Notes' property exists if used (Rich Text type)
+        if notes:
+            properties["Notes"] = {"rich_text": [{"text": {"content": notes}}]}
+
+        response = await notion.pages.create(
+            parent={"database_id": config.NOTION_EXPENSE_DB_ID},
+            properties=properties
+        )
+        page_url = response.get("url", "N/A")
+        logger.info(f"Expense added. Page ID: {response['id']}, URL: {page_url}")
+        return f"Expense of {amount} added on {expense_date}. URL: {page_url}"
+    except ValueError as ve:
+         logger.warning(f"Invalid date format for expense: {expense_date} or invalid amount {amount}")
+         return "Invalid date format (YYYY-MM-DD) or amount for expense."
     except Exception as e:
-        logger.error(f"Unexpected error adding expense '{item_name}': {e}", exc_info=True)
-        return f"An unexpected error occurred while adding expense '{item_name}'." # Simple string
+        logger.error(f"Error adding expense: {e}", exc_info=True)
+        return f"Failed to add expense: {str(e)}"
 
+# -------------------------------------------------------------------
+# 5. Update Page Notes Function (Generic)
+# -------------------------------------------------------------------
 
-async def update_task_status(page_id: str, status: str) -> str:
-    # ... (keep existing implementation) ...
-    if not _validate_notion_client():
-        return "Error: Notion client is not configured."
-    # ... rest of the function ...
+async def update_page_notes(page_id: str, note: str, append: bool = True) -> str:
+    """Appends or overwrites the 'Notes' property of a specific Notion page."""
+    notion = _get_notion_client()
+    if not notion:
+        return "Notion client not configured."
+    logger.info(f"Updating notes for page {page_id}; append = {append}")
     try:
-        # ... notion call ...
-        return f"Task status updated to '{status}'."
-    except APIResponseError as e:
-        error_message = e.body.get('message', str(e))
-        logger.error(f"Notion API Error updating status for page {page_id}: {error_message}", exc_info=True)
-        return f"Error updating status for task {page_id}: {error_message}" # Simple string
-    except Exception as e:
-        logger.error(f"Unexpected error updating status for page {page_id}: {e}", exc_info=True)
-        return f"An unexpected error occurred while updating status for task {page_id}." # Simple string
+        # We assume a 'Notes' property exists and is of type 'rich_text'
+        # The function doesn't know which database it belongs to, relies on page_id validity
+        properties_update = {"Notes": {"rich_text": [{"text": {"content": note}}]}}
 
-# --- Make sure any other tool functions like delete_task, create_travel_plan, update_task_notes ---
-# --- also return simple strings on error if you implement/uncomment them ---
+        if append:
+             # Retrieve existing notes first
+             try:
+                 page = await notion.pages.retrieve(page_id=page_id)
+                 existing_notes = ""
+                 # Check if 'Notes' property exists and has content
+                 if "Notes" in page.get("properties", {}) and page["properties"]["Notes"].get("rich_text"):
+                     # Concatenate plain text from all rich text objects
+                     existing_notes = "".join([text.get("plain_text", "") for text in page["properties"]["Notes"]["rich_text"]])
+
+                 if existing_notes:
+                     new_notes = existing_notes.strip() + "\n---\n" + note # Add separator
+                     properties_update["Notes"]["rich_text"] = [{"text": {"content": new_notes}}]
+                 else:
+                      # If no existing notes, just use the new note (overwrite behavior)
+                      properties_update["Notes"]["rich_text"] = [{"text": {"content": note}}]
+
+
+             except Exception as retrieve_error:
+                 logger.warning(f"Could not retrieve existing notes for page {page_id} to append: {retrieve_error}. Overwriting instead.")
+                 # Fallback to overwriting if retrieval fails - properties_update already holds the overwrite value
+
+        await notion.pages.update(
+            page_id=page_id,
+            properties=properties_update
+        )
+        return f"Notes for page {page_id} updated."
+    except Exception as e:
+        logger.error(f"Error updating notes for {page_id}: {e}", exc_info=True)
+        # Provide more specific error if possible (e.g., property mismatch)
+        error_message = str(e)
+        if "property does not exist" in error_message.lower() or "schema mismatch" in error_message.lower():
+             return f"Failed to update notes: Ensure page {page_id} has a 'Notes' property of type Rich Text. Error: {error_message}"
+        return f"Failed to update notes for page {page_id}: {error_message}"
+
+# Note: The function `update_task_notes` was renamed to `update_page_notes`
+# as it can technically update notes on any page, although intended for tasks/travel plans.
+# If you specifically need it only for the Task DB, add a check for config.NOTION_TASK_DB_ID
+# and potentially retrieve the page first to verify its parent database.

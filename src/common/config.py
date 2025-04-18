@@ -53,6 +53,7 @@ class _Config:
         # --- Application Settings ---
         self.LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
         self.DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "False").lower() == "true"
+        self.TIMEZONE: str = os.getenv("TIMEZONE", "UTC") # Default provided
 
         # --- Server Settings ---
         self.API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
